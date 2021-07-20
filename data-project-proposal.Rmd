@@ -1,6 +1,6 @@
 ---
 title: 'Final Data Project'
-author: "STAT 420, Summer 2021, Warren Child, Zoheb Satta, Yoga Mahalingam"
+author: "STAT 420, Summer 2021, Warren Daniel Child, Zoheb Satta, Yoga Mahalingam"
 date: ''
 output:
   html_document: 
