@@ -21,6 +21,7 @@ opts_chunk$set(cache = TRUE, autodep = TRUE)
 # Life Expectancy Model
 
 ## Proposal
+I will be writing the proposal here. <Daniel>
 
 ## Datasource
 
