@@ -1,0 +1,271 @@
+---
+title: 'Final Data Project'
+author: "STAT 420, Summer 2021, Warren Child, Zoheb Satta, Yoga Mahalingam"
+date: ''
+output:
+  html_document: 
+    theme: readable
+    toc: yes  
+  pdf_document: default
+urlcolor: cyan
+---
+
+***
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+options(scipen = 1, digits = 4, width = 80)
+library(knitr)
+opts_chunk$set(cache = TRUE, autodep = TRUE)
+```
+
+# Life Expectancy Model
+
+## Proposal
+This project will employ data on variables that affect life expectancy. The data--which originates from the World Health Organization and which is available on Kaggle (https://www.kaggle.com/kumarajarshi/life-expectancy-who)--consists of 2939 observations on 22 variables. Our response variable will be life expectancy, and we will attempt to develop a model that minimizes prediction errors for life expectancy. The data contains two categorical variables--country and level of economic development. The rest of the variables are numerical.
+
+Many of the variables fall under discrete themes. For example, there are variables for diseases, variables concerning the economy and population, and variables related to nutrition. When developing our model, we must consider how to treat variables that fall under such themes. These theme-based variables may end up exhibiting significant collinearity, or they may prove to be legitimate independent variables. 
+
+Another important consideration is that each record is associated with a year and a country. After discussion with the professor or a TA, we must decide whether to ignore country (as a factor it would create a huge number of parameters), as well as whether to average all of the years for a given country. One possibility is that, rather than using country as a factor variable, it may be more useful to bin countries into a number of economic levels based on per-capita GDP. 
+
+## Datasource
+
+https://www.kaggle.com/kumarajarshi/life-expectancy-who
+
+## Data summary
+```{r}
+library(readr)
+lifexdata <-  read.csv("Life Expectancy Data.csv")
+df <- data.frame(lifexdata)
+head(df)
+```
+
+```{r}
+str(lifexdata)
+names(lifexdata)
+```
+
+- Number of observations: ``r {nrow(lifexdata)}``
+- Number of variables : ``r {ncol(lifexdata)}``
+- Response variable: `Life expectancy` Type: `Numeric`
+- Potential Categorical Predictor variables:
+  - Country
+  - Status
+  - Year
+- Potential Numeric Predictor variables:
+  -Adult Mortality
+  - infant deaths
+  - Alcohol
+  - percentage expenditure
+  - Hepatitis B
+  - Measles
+  - BMI
+  - under-five deaths
+  - Polio
+  - Total expenditure
+  - Diphtheria
+  - HIV/AIDS
+  - GDP
+  - Population
+  - thinness  1-19 years
+  - thinness 5-9 years
+  - Income composition of resources
+  - Schooling
+
+One would expect GDP per capita to be a major influencing factor as rich countries should presumably be able to help maintain a healthier population than poor countries. Accordingly, we create a new variable per_cap_GDP to capture this possibility. Unfortunately, the values become tiny and may be subject to rounding errors. We therefore translate this into a log(per_cap_GDP).
+
+```{r}
+df$per_cap_GDP <- df$GDP / df$Population # values too small
+df$log_per_cap_GDP <- log(df$per_cap_GDP) # better scale
+```
+
+An obvious question to start out with is whether there is significant collinearity among the variables. A pairs plot may give us some quick insight into the matter.
+
+```{r}
+colnames(df)
+```
+Because there are so many variables, it is impossible to see anything if one applies "pairs" to all the numeric variables. Therefore, we have chosen to illustrate pair plots for categories of information.
+
+```{r}
+weight <- subset(df, select = c(Life.expectancy, BMI, thinness..1.19.years, thinness.5.9.years))
+pairs(weight, col = "darkblue", main = "Pair Plots for Weight Indices and Life Expectancy")
+```
+There appears to be serious collinearity between the two thinness variables. 
+
+```{r}
+money <- subset(df, select = c(Life.expectancy, percentage.expenditure, log_per_cap_GDP, Income.composition.of.resources, GDP))
+pairs(money, col = "darkgreen", main = "Economic Factors and Life Expectancy")
+```
+
+
+```{r}
+diseases <- subset(df, select = c(Life.expectancy, Hepatitis.B, Measles, Polio, Diphtheria, HIV.AIDS))
+pairs(diseases, col = "darkred", main = "Pair Plots for Diseases and Life Expectancy")
+```
+
+We can create temporary models based on these categories just to get a rough idea if these categories of variables tend to have certain trends with respect to life expectancy.
+```{r}
+(discols <- colnames(diseases))
+(moncols <- colnames(money))
+(weightcols <- colnames(weight))
+disease_model <- lm(Life.expectancy ~ Hepatitis.B + Measles + Polio + Diphtheria + HIV.AIDS, data = df)
+money_model <- lm(Life.expectancy ~ percentage.expenditure + log_per_cap_GDP + Income.composition.of.resources + GDP, data = df)
+weight_model <- lm(Life.expectancy ~ BMI + thinness..1.19.years + thinness.5.9.years, data = df)
+```
+
+**Disease Model**
+```{r}
+(s_disease <- summary(disease_model))
+```
+At a glance, it seems like Measles, Polio, Diphtheria, and AIDS all have highly significant effects on life expectancy. For some reason, Hepatitis.B does not have a statistically significant effect.
+
+**Money Model**
+```{r}
+(s_money <- summary(money_model))
+```
+
+When we look at monetary factors, log-per_cap_GDP is highly significant, as is Income composition of resources. percentage expenditure and GDP are not. We may want to eliminate them from further consideration.
+
+**Weight Model**
+```{r}
+(s_weight <- summary(weight_model))
+```
+
+Finally, it appears that thinness 1.19 years is an important factor, as is BMI, but thinness 5.9 years is not significant. We can immediately compare the improved models.
+
+**Preliminary Elimination**
+So far it looks like, 
+from the money category, we can eliminate 
+  - percentage.expenditure
+  - GDP
+from diseases, we can eliminate 
+  - Hepatitis
+and from the weight category, we can eliminate 
+  - thinness.5.9.years. 
+  
+Let's create new models without these unhelpful catgories and see if they end up being better.
+
+```{r}
+money_reduced <- lm(Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources, data = df)
+s_money_reduced <- summary(money_reduced)
+s_money$adj.r.squared
+s_money_reduced$adj.r.squared
+```
+Adjusted R-squared is slightly better with the original model, but at the expense of two variables, one of which (GDP) is better reflected by per-capita GDP.
+
+```{r}
+disease_reduced <- lm(Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS, data = df)
+s_disease_reduced <- summary(disease_reduced)
+s_disease$adj.r.squared
+s_disease_reduced$adj.r.squared
+```
+In the case of disease, the reduced model shows an improvement over the original model containing all diseases.
+
+```{r}
+weight_reduced <- lm(Life.expectancy ~ BMI + thinness..1.19.years, data = df)
+s_weight_reduced <- summary(disease_reduced)
+s_weight$adj.r.squared
+s_weight_reduced$adj.r.squared
+```
+Again, the reduced model shows a better adjusted R-squared, suggesting that when considering variables related to weight,  BMI and thinness..1.19.years are sufficient variables for consideration.
+
+**Assumptions**    
+*Shapiro Wilks Test*
+```{r}
+shapiro.test(resid(money_reduced))
+shapiro.test(resid(disease_reduced))
+shapiro.test(resid(weight_reduced))
+```
+Well, it looks like we do not have normal data, and that in each case we may have to reject the normality assumption. That is unfortunate. Let's check the QQ plots to be sure.
+```{r}
+par(mfrow = c(1,2))
+plot(fitted(disease_reduced), resid(disease_reduced),  col = "darkred",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Streamlined Disease Model")
+abline(h = 0, lwd = 3, col = "black")
+qqnorm(resid(disease_reduced))
+qqline(resid(disease_reduced))
+```
+In the case of disease, the QQ plot doesn't look so bad, but the fitted vs residuals is a bit of an issue.
+
+```{r}
+par(mfrow = c(1,2))
+plot(fitted(money_reduced), resid(money_reduced),  col = "darkgreen",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Streamlined Money Model")
+abline(h = 0, lwd = 3, col = "goldenrod")
+qqnorm(resid(money_reduced))
+qqline(resid(money_reduced))
+```
+In the case of money, the fitted vs residuals plot is problematic, as on the lower end of fitted values, it is as if an entirely different association were taking place. Linearity is somehow violated for low values (nearly all the residuals are above a mean of 0.) Variance does not look horrific outside of the lower range in that plot, but it is certainly not perfect. I suspect that the strange behavior for lwoer values suggests that there must be an interaction variable of some kind. Perhaps certain countries, or countries with a certain level of per-capita GDP operate by an entirely different model? We will find out when we merge the category-specific models.
+
+Incidentally, the QQ plot looks terrible, with normality clearly violated at extreme values, suggesting that the normality of errors is clearly violated outside the middle quantiles.
+
+```{r}
+par(mfrow = c(1,2))
+plot(fitted(weight_reduced), resid(weight_reduced),  col = "darkblue",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Streamlined Weight Model")
+abline(h = 0, lwd = 3, col = "purple")
+qqnorm(resid(money_reduced))
+qqline(resid(money_reduced))
+```
+For weight, the fitted residuals plot looks OK in the middle ranges, but at the outer ends, we are clearly not getting a linear response, with all values above 0 for the lower fitted values, and all values below 0 for the higher fitted values. Once again, the QQ Plot shows extreme departure from the ideal line at the lower and upper quantiles.
+
+*Breusch-Pagan Test for Heteroscedasticity*
+```{r}
+library(lmtest)
+bptest(money_reduced)
+bptest(disease_reduced)
+bptest(weight_reduced)
+```
+Again, these results are unfortunate. It appears that we cannot assume constant variance with our data.
+
+*Variance Inflation Factor*
+```{r}
+car::vif(money_reduced)
+car::vif(disease_reduced)
+car::vif(weight_reduced)
+```
+
+All of these values look quite good. So we have presumably eliminated collinearity in these small, category-based models.
+
+*Basic Plots*
+```{r}
+plot(money_reduced, col = "darkgreen")
+```
+
+
+```{r}
+plot(disease_reduced, col = "darkred")
+```
+
+```{r}
+plot(weight_reduced, col = "darkblue")
+```
+
+##Note to Team Members##
+So at this stage, I think we have identified some good variables for each of the categories.
+The next step is to try to create a flusher model that combines data from each of these categories into one larger model. There's a number of ways to do this. One would be to keep all the variables I have identified as "good" within the scope, and use forward AIC or BIC. Something like:
+
+```{r}
+starter <- disease_reduced
+coef(disease_reduced)
+coef(money_reduced)
+coef(weight_reduced)
+# You could use either of the other two models as well.
+combined_model <- step(starter,
+                       scope = Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS + log_per_cap_GDP + 
+                       Income.composition.of.resources + BMI + thinness..1.19.years,
+                       direction = "both",
+                       trace = 0)
+```
+I'm getting an error here, and am not sure what that is about, but I need to go to be since it's late in Ireland and I have to take the exam tomorrow morning. Let me know if you can carry this forward, upload your additions, and I can take over again tomorrow afternoon Ireland time (early in the morning for you guys). Thanks.
+
+Oh, I did one transformation (log of a created variable), but there may be other possible transformations we could try to get a better fitting model.
+
+At the end, of course, we need to do some testing (cross-val etc.).
+
+Good night.
