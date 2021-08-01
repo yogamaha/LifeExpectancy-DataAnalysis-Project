@@ -1,0 +1,387 @@
+---
+title: 'Final Data Project'
+author: "STAT 420, Summer 2021, Warren Child, Zoheb Satta, Yoga Mahalingam"
+date: ''
+output:
+  html_document: 
+    theme: readable
+    toc: yes  
+  pdf_document: default
+urlcolor: cyan
+---
+
+***
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+options(scipen = 1, digits = 4, width = 80)
+library(knitr)
+opts_chunk$set(cache = TRUE, autodep = TRUE)
+```
+
+# Life Expectancy Model
+
+## Proposal
+This project will employ data on variables that affect life expectancy. The data--which originates from the World Health Organization and which is available on Kaggle (https://www.kaggle.com/kumarajarshi/life-expectancy-who)--consists of 2939 observations on 22 variables. Our response variable will be life expectancy, and we will attempt to develop a model that minimizes prediction errors for life expectancy. The data contains two categorical variables--country and level of economic development. The rest of the variables are numerical.
+
+Many of the variables fall under discrete themes. For example, there are variables for diseases, variables concerning the economy and population, and variables related to nutrition. When developing our model, we must consider how to treat variables that fall under such themes. These theme-based variables may end up exhibiting significant collinearity, or they may prove to be legitimate independent variables. 
+
+Another important consideration is that each record is associated with a year and a country. After discussion with the professor or a TA, we must decide whether to ignore country (as a factor it would create a huge number of parameters), as well as whether to average all of the years for a given country. One possibility is that, rather than using country as a factor variable, it may be more useful to bin countries into a number of economic levels based on per-capita GDP. 
+
+## Datasource
+
+https://www.kaggle.com/kumarajarshi/life-expectancy-who
+
+## Data summary
+```{r}
+library(readr)
+lifexdata <-  read.csv("Life Expectancy Data.csv")
+df <- data.frame(lifexdata)
+df <- na.omit(df) # if we don't do this, there will be a lot of errors when different models have different data
+head(df)
+```
+
+```{r}
+str(lifexdata)
+names(lifexdata)
+```
+
+- Number of observations: ``r {nrow(lifexdata)}``
+- Number of variables : ``r {ncol(lifexdata)}``
+- Response variable: `Life expectancy` Type: `Numeric`
+- Potential Categorical Predictor variables:
+  - Country
+  - Status
+  - Year
+- Potential Numeric Predictor variables:
+  -Adult Mortality
+  - infant deaths
+  - Alcohol
+  - percentage expenditure
+  - Hepatitis B
+  - Measles
+  - BMI
+  - under-five deaths
+  - Polio
+  - Total expenditure
+  - Diphtheria
+  - HIV/AIDS
+  - GDP
+  - Population
+  - thinness  1-19 years
+  - thinness 5-9 years
+  - Income composition of resources
+  - Schooling
+
+One would expect GDP per capita to be a major influencing factor as rich countries should presumably be able to help maintain a healthier population than poor countries. Accordingly, we create a new variable per_cap_GDP to capture this possibility. Unfortunately, the values become tiny and may be subject to rounding errors. We therefore translate this into a log(per_cap_GDP).
+
+```{r}
+df$per_cap_GDP <- df$GDP / df$Population # values too small
+df$log_per_cap_GDP <- log(df$per_cap_GDP) # better scale
+```
+
+An obvious question to start out with is whether there is significant collinearity among the variables. A pairs plot may give us some quick insight into the matter.
+
+```{r}
+colnames(df)
+```
+Because there are so many variables, it is impossible to see anything if one applies "pairs" to all the numeric variables. Therefore, I have chosen to illustrate pair plots for categories of information.
+
+```{r}
+weight <- subset(df, select = c(Life.expectancy, BMI, thinness..1.19.years, thinness.5.9.years))
+pairs(weight, col = "darkblue", main = "Pair Plots for Weight Indices and Life Expectancy")
+```
+There appears to be serious collinearity between the two thinness variables. Let's check this.
+
+```{r}
+round(cor(weight), 2)
+```
+As expected, the correlation between thinness..1.19.years and thinness.5.9.years (with a correlation of 0.93). One of these should be droped from the weight model.
+
+```{r}
+money <- subset(df, select = c(Life.expectancy, percentage.expenditure, log_per_cap_GDP, Income.composition.of.resources, GDP))
+pairs(money, col = "darkgreen", main = "Economic Factors and Life Expectancy")
+```
+If we check for collinearity, we find the following.
+
+```{r}
+round(cor(money), 2)
+```
+There are some highly correlated factors, such as GDP and percentage.expenditure (the correlation is 0.96). Clearly one of those two variables shoudl be eliminated
+
+```{r}
+diseases <- subset(df, select = c(Life.expectancy, Hepatitis.B, Measles, Polio, Diphtheria, HIV.AIDS))
+pairs(diseases, col = "darkred", main = "Pair Plots for Diseases and Life Expectancy")
+```
+
+Checking for correlations, we find the following.
+```{r}
+round(cor(diseases), 2)
+```
+In this case, there are no obvious candidates for removal, as the correlations tend to be small, and in fact, frequently slihtly negative.
+
+Finally, there are some miscellaneous variables that do not really fall into one category. They cover a miscellany of topics about life and death, including alcohol (consumption), adult mortality, infant or children death, schooling, and population. You could call this catgory "lifestyle and death", but I am going to call it "lifestyle" for short. As always, they are compared against life expectancy.
+
+```{r}
+lifestyle <- subset(df, select = c(Life.expectancy, Alcohol, Adult.Mortality, infant.deaths, under.five.deaths, Schooling, Population))
+pairs(lifestyle, col = "cadetblue4", main = "Lifestyle, Schooling, Population, and Death")
+```
+From the plots, right away we suspect nearly perfect collinearity between infant.deaths and under.five deaths. A check for correlations confirms that.    
+```{r}
+round(cor(lifestyle), 2)
+```
+Here we see some strong correlations between variables and life expectancy. For example, adjult mortality has a strong negative correlation, and schooling has a strong positive correlation. But in terms of collinear predictors, nothing jumps out here, so for now we can keep these.
+
+**Preliminary Thematic Models**
+We can create temporary models based on these themes just to get a rough idea if these categories of variables tend to have certain trends with respect to life expectancy.
+```{r}
+(discols <- colnames(diseases))
+(moncols <- colnames(money))
+(wtcols <- colnames(weight))
+(lscols <- colnames(lifestyle))
+disease_model <- lm(Life.expectancy ~ Hepatitis.B + Measles + Polio + Diphtheria + HIV.AIDS, data = df)
+money_model <- lm(Life.expectancy ~ percentage.expenditure + log_per_cap_GDP + Income.composition.of.resources + GDP, data = df)
+weight_model <- lm(Life.expectancy ~ BMI + thinness..1.19.years + thinness.5.9.years, data = df)
+lifestyle_model <- lm(Life.expectancy ~ Alcohol + Adult.Mortality + infant.deaths + under.five.deaths + Schooling, data = df)
+```
+
+**Disease Model**
+```{r}
+(s_disease <- summary(disease_model))
+```
+At a glance, it seems like Measles, Polio, Diphtheria, and AIDS all have highly significant effects on life expectancy. For some reason, Hepatitis.B does not have a statistically significant effect.
+
+**Money Model**
+```{r}
+(s_money <- summary(money_model))
+```
+
+When we look at monetary factors, log-per_cap_GDP is highly significant, as is Income composition of resources. percentage expenditure and GDP are not. We may want to eliminate them from further consideration.
+
+**Weight Model**
+```{r}
+(s_weight <- summary(weight_model))
+```
+
+Finally, it appears that thinness 1.19 years is an important factor, as is BMI, but thinness 5.9 years is not significant. We can immediately compare the improved models.
+
+**Lifestyle Model**
+```{r}
+(s_lifestyle <- summary(lifestyle_model))
+```
+Out of the lifestyle variables, it appears that Alcohol is a weak predictor, with a p-value of only 0.22. We may want to jettison that variable. Also, as we noted earlier, infant.deaths and under.five.deaths are practically the same thing. "Under five"" seems to be more inclusive (it may include infants), so we will jetisson infant.deaths.
+
+**Preliminary Elimination**
+So far it looks like, 
+from the money category, we can eliminate 
+  - percentage.expenditure
+  - GDP
+from diseases, we can eliminate 
+  - Hepatitis
+from the weight category, we can eliminate 
+  - thinness.5.9.years, and
+from the lifestyle category, we can eliminate
+  - Alcohol and infant deaths.
+  
+Let's create new models without these unhelpful predictors and see if they end up being better.
+
+```{r}
+money_reduced <- lm(Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources, data = df)
+s_money_reduced <- summary(money_reduced)
+s_money$adj.r.squared
+s_money_reduced$adj.r.squared
+```
+Adjusted R-squared is slightly better with the original model, but at the expense of two variables, one of which (GDP) is better reflected by per-capita GDP.
+
+```{r}
+disease_reduced <- lm(Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS, data = df)
+s_disease_reduced <- summary(disease_reduced)
+s_disease$adj.r.squared
+s_disease_reduced$adj.r.squared
+```
+In the case of disease, the reduced model shows an improvement over the original model containing all diseases.
+
+```{r}
+weight_reduced <- lm(Life.expectancy ~ BMI + thinness..1.19.years, data = df)
+s_weight_reduced <- summary(weight_reduced)
+s_weight$adj.r.squared
+s_weight_reduced$adj.r.squared
+```
+Again, the reduced model shows an ever so slightly worse adjusted R-squared, but at the expense of two variables we probably don't need. When considering variables related to weight,  BMI and thinness..1.19.years are sufficient variables for consideration.
+
+```{r}
+lifestyle_reduced <- lm(Life.expectancy ~ Adult.Mortality + under.five.deaths + Schooling + Population, data = df)
+s_lifestyle_reduced <- summary(lifestyle_reduced)
+s_lifestyle$adj.r.squared
+s_lifestyle_reduced$adj.r.squared
+```
+The adjusted R-squared variables are pretty close for the full and reduced "lifestyle" models. Once again, the full model is slightly better (higher), but not by that much.
+
+**Assumptions**    
+*Shapiro Wilks Test*
+```{r}
+shapiro.test(resid(money_reduced))
+shapiro.test(resid(disease_reduced))
+shapiro.test(resid(weight_reduced))
+shapiro.test(resid(lifestyle_reduced))
+```
+Well, it looks like we do not have normal data, and that in each case we may have to reject the normality assumption. That is unfortunate. Let's check the QQ plots to be sure.
+
+```{r}
+par(mfrow = c(1,2))
+plot(fitted(disease_reduced), resid(disease_reduced),  col = "darkred",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Streamlined Disease Model")
+abline(h = 0, lwd = 3, col = "black")
+qqnorm(resid(disease_reduced))
+qqline(resid(disease_reduced))
+```
+In the case of disease, the QQ plot doesn't look so bad, but the fitted vs residuals is a bit of an issue.
+
+```{r}
+par(mfrow = c(1,2))
+plot(fitted(money_reduced), resid(money_reduced),  col = "darkgreen",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Streamlined Money Model")
+abline(h = 0, lwd = 3, col = "goldenrod")
+qqnorm(resid(money_reduced))
+qqline(resid(money_reduced))
+```
+In the case of money, the fitted vs residuals plot is problematic, as on the lower end of fitted values, it is as if an entirely different association were taking place. Linearity is somehow violated for low values (nearly all the residuals are above a mean of 0.) Variance does not look horrific outside of the lower range in that plot, but it is certainly not perfect. I suspect that the strange behavior for lwoer values suggests that there must be an interaction variable of some kind. Perhaps certain countries, or countries with a certain level of per-capita GDP operate by an entirely different model? We will find out when we merge the category-specific models.
+
+Incidentally, the QQ plot looks terrible, with normality clearly violated at extreme values, suggesting that the normality of errors is clearly violated outside the middle quantiles.
+
+```{r}
+par(mfrow = c(1,2))
+plot(fitted(weight_reduced), resid(weight_reduced),  col = "darkblue",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Streamlined Weight Model")
+abline(h = 0, lwd = 3, col = "purple")
+qqnorm(resid(money_reduced))
+qqline(resid(money_reduced))
+```
+For weight, the fitted residuals plot looks OK in the middle ranges, but at the outer ends, we are clearly not getting a linear response, with all values above 0 for the lower fitted values, and all values below 0 for the higher fitted values. Once again, the QQ Plot shows extreme departure from the ideal line at the lower and upper quantiles.
+
+```{r}
+par(mfrow = c(1,2))
+plot(fitted(lifestyle_reduced), resid(lifestyle_reduced),  col = "cadetblue4",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Streamlined Lifestyle Model")
+abline(h = 0, lwd = 3, col = "brown4")
+qqnorm(resid(money_reduced))
+qqline(resid(money_reduced))
+```
+The fitted vs residuals plot is not terrible, though normality is a bit suspect in the middle ranges (esp. around 70), and one gets the impresion that values are more weighted below the 0 line. Meanwhile, the QQ plot shows gross departures from the ideal line and both lower and upper ends.    NOTE TO TEAMMATES, I VAGUELY REMEMBER A TRANSFORMATION IN THE TEXTBOOK THAT TOOK CARE OF THIS KIND OF PROBLEM. WE SHOULD TRY TO DO THAT HERE.
+
+*Breusch-Pagan Test for Heteroscedasticity*
+```{r}
+library(lmtest)
+bptest(money_reduced)
+bptest(disease_reduced)
+bptest(weight_reduced)
+bptest(lifestyle_reduced)
+```
+Again, these results are unfortunate. It appears that we cannot assume constant variance with our data.
+
+*Variance Inflation Factor*
+```{r}
+car::vif(money_reduced)
+car::vif(disease_reduced)
+car::vif(weight_reduced)
+car::vif(lifestyle_reduced)
+```
+All of these values look quite good. By eliminating highly correlated variables, we seem to have eliminated collinearity within these sub-models.
+
+*Basic Plots*
+```{r}
+plot(money_reduced, col = "darkgreen")
+```
+
+
+```{r}
+plot(disease_reduced, col = "darkred")
+```
+
+```{r}
+plot(weight_reduced, col = "darkblue")
+```
+
+```{r}
+plot(lifestyle_reduced, col = "cadetblue4")
+```
+
+**Note to Team Members**
+It occurs to me that before moving to a bigger model (as I do below), we might want to consider steps we could take to fix some of the normality and variance issues pinpointed above. It will be easier to do this within each submodel.
+
+**Moving to a Bigger Model**
+So at this stage, we have identified some good variables for each of the categories (themes). The next step is to try to create a flusher model that combines data from each of these categories into one larger model. There's a number of ways to do this. One would be to keep all the variables I have identified as "good" within the scope, and use forward AIC or BIC. Something like:
+
+```{r}
+starter <- money_reduced
+coef(disease_reduced)
+coef(money_reduced)
+coef(weight_reduced)
+coef(lifestyle_reduced)
+```
+We could choose any of these four models as a starter.
+
+```{r}
+# You could use either of the other two models as a starter as well. Shouldn't matter which. But I am starting with disease since it has the most predictors.
+starter <- lm(Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS, data = df)
+combined_model_aic <- step(starter,
+                       scope = Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS + log_per_cap_GDP +
+                       Income.composition.of.resources + BMI + thinness..1.19.years + 
+                       Adult.Mortality + under.five.deaths + Schooling + Population,
+                       direction = "both",
+                       trace = 0)
+```
+We now have a model that combines diseases, thinness, and some wealth information as well.
+
+```{r}
+coef(combined_model_aic)
+```
+It looks like the stepping with AIC chose to keep all of our original variables except Measles. We can now compare this combined model against the original "reduced" models. We could also try BIC.
+
+```{r}
+n <- nrow(df)
+combined_model_bic <- step(starter, k = log(n),
+                       scope = Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS + log_per_cap_GDP +
+                       Income.composition.of.resources + BMI + thinness..1.19.years + 
+                       Adult.Mortality + under.five.deaths + Schooling + Population,
+                       direction = "both",
+                       trace = 0)
+```
+
+
+```{r}
+anova(disease_reduced, combined_model_aic)[2, "Pr(>F)"]
+anova(money_reduced, combined_model_aic)[2, "Pr(>F)"]
+anova(weight_reduced, combined_model_aic)[2, "Pr(>F)"]
+```
+It's odd that these all show up as "0". But by running the ANOVA we can plainly see that the combined model attained through AIC is better than the weight_reduced model.
+
+```{r}
+anova(weight_reduced, combined_model_aic)
+```
+It must be that the p-value is so small it is creating an error. In any case, judging from the p-values revealed by the F-statistic, the combined model achieved through AIC stepping appears to be vastly superior to the individual models.
+
+```{r}
+anova(disease_reduced, combined_model_bic)[2, "Pr(>F)"]
+anova(money_reduced, combined_model_bic)[2, "Pr(>F)"]
+anova(weight_reduced, combined_model_bic)[2, "Pr(>F)"]
+```
+
+Once again we are getting 0 values. The same is true for the combined models obtained through BIC. If we compare the coefficients between AIC and BIC, we notice that the the models slightly differ. That is certainly surprising, given that BIC is said to favor smaller models.
+
+```{r}
+names(coef(combined_model_aic))
+names(coef(combined_model_bic))
+length(coef(combined_model_aic))
+length(coef(combined_model_bic))
+```
+The first eight predictors are the same for both model, but BIC does not have "under.five.deaths", "Population", or "thinness..1.19.years".    
+
+**NOTE TO TEAMMATES, NOT TOO SURE WHAT TO DO NEXT. I DID MENTION ABOVE THAT WE MIGHT WANT TO TRY TRANSFORMATIONS *WITHIN* THE SUBMODELS TO SEE IF WE CAN ELIMINATE SOME OF THE VIOLATIONS.**
