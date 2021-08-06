@@ -712,13 +712,14 @@ anova_add_int <- anova(add_model,int_model)[2,"Pr(>F)"]
 |Model        |Adjusted $R^2$ |Anova vs AIC Model|No. Of Predictors             |
 |-------------|---------------|------------------|------------------------------|
 |AIC          |`r aic_r2`     | NA               |`r length(coef(aic_model))-1` |
+|Additive     |`r add_r2`     |`r anova_aic_add` |`r length(coef(add_model))-1` |
 |Interactive  |`r int_r2`     |`r anova_aic_int` |`r length(coef(int_model))-1` |
 
-####Comparing Train and Test Data Performance
+#### Comparing Train and Test Data Performance
 
-However, we did not consider the possibility for overfitting. It would make sense, therefore, to now split the data into train and test datasets, and to see how these models behave.
+However, we did not consider the possibility for overfitting. It would make sense, therefore, to validate with test datasets, and to see how these models behave.
 
-##TO DO: Train and Test Data
+## Train and Test Data
 ```{r, message = FALSE}
 
 ```
@@ -726,14 +727,84 @@ However, we did not consider the possibility for overfitting. It would make sens
 |                 | RMSE (train)        | RMSE (test)                | No of Predictors               |
 |-----------------|---------------------|----------------------------|--------------------------------|
 |AIC Model        | `r rmse(aic_model)` | `r rmse(aic_model, FALSE)` | `r length(coef(aic_model)) - 1`|
+|Additive Model        | `r rmse(add_model)` | `r rmse(add_model, FALSE)` | `r length(coef(add_model)) - 1`|
+|Interactive Model        | `r rmse(int_model)` | `r rmse(int_model, FALSE)` | `r length(coef(int_model)) - 1`|
 
 
 
-Looking at the RMSE we can see that the model with the transformed predictors as it has a lower RMSE for both the training and testing data. It also has less predictors and we prefer smaller models. As for the combined models that were derived by combining "mini category-based" models, although their explainability is clearly preferable given that they employ largely straightforward combinations of variables, they produce slightly higher RMSEs than both the transformed and additive models. In the end, the transformed model, with only 13 predictors, is best.
+Looking at the RMSE we can see that the model with the transformed predictors as it has a lower RMSE for both the training and testing data. It also has less predictors and we prefer smaller models. As for the combined models that were derived by combining "mini category-based" models, although their explainability is clearly preferable given that they employ largely straightforward combinations of variables, they produce slightly higher RMSEs than both the transformed and additive models. In the end, the transformed model, with only 10 predictors, is best.
+
+#### Assumptions Tests 
+
+**Breusch-Pagan Test for Heteroscedasticity**
+
+```{r}
+bp_aic_val = bptest(aic_model)$p.value
+bp_add_val = bptest(add_model)$p.value
+bp_int_val = bptest(int_model)$p.value
+```
+                              
+|Model        |BP P-Val |
+|-------------|------------------|
+|AIC          |`r bp_aic_val`    |
+|Additive     |`r bp_add_val`    |
+|Interactive  |`r bp_int_val`    |
 
 
+```{r}
+par(mfrow = c(2,2))
+plot(fitted(aic_model), resid(aic_model),  col = "darkgreen",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "AIC Model")
+abline(h = 0, lwd = 3, col = "goldenrod")
 
-### FINAL TO DO:
-- explain that we have come up with a logical "explanatory model" (the combined models) and a very accurate prediction model (the transformation models).
-- make sure we are following the rubric
-- we may also want to subject the transformation models to some of the assumptions for validation
+plot(fitted(add_model), resid(add_model),  col = "red",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Additive Model")
+abline(h = 0, lwd = 3, col = "goldenrod")
+
+#par(mfrow = c(1,2))
+#Interaction Model
+plot(fitted(int_model), resid(int_model),  col = "blue",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Interaction Model")
+abline(h = 0, lwd = 3, col = "black")
+
+```
+
+**Observations:**
+
+Our graphs confirm what our results of our BP tests. The Money Model and Disease model both improved greatly, while the Weight and Lifestyle models stayed basically the same. 
+
+
+We also want to see if there has been any improvement in the Normality Assumptions so we shall run the Shapiro-Wilks test and compare. 
+
+**Shapiro-Wilks Test**
+
+|Model        |Shapiro-Wilks P-Value |
+|-------------|----------------------|
+|AIC          |`r shapiro.test(resid(aic_model))$p.value`    |
+|Additive     |`r shapiro.test(resid(add_model))$p.value`    |
+|Interactive  |`r shapiro.test(resid(int_model))$p.value`    |
+
+These values are strange, it appears that the only Model who's P-value improved was the Money model. Let's look at the graphs while comparing them to the reduced models
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(resid(aic_model), main = "AIC Model", col = "darkgreen")
+qqline(resid(aic_model))
+
+qqnorm(resid(add_model), main = "Additive Model", col = "red")
+qqline(resid(add_model))
+
+qqnorm(resid(int_model), main = "Interactive Model", col = "blue")
+qqline(resid(int_model))
+
+```
+
+
+### Summary:
+- Final Model with the following predictors is the best fitting model : log_per_cap_GDP, Income.composition.of.resources, HIV.AIDS, Adult.Mortality, under.five.deaths, Population, Diphtheria
