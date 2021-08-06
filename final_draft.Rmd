@@ -1,0 +1,739 @@
+---
+title: 'Final Data Project'
+author: "STAT 420, Summer 2021, Warren Child, Zoheb Satta, Yoga Mahalingam"
+date: ''
+output:
+  html_document: 
+    theme: readable
+    toc: yes  
+  pdf_document: default
+urlcolor: cyan
+---
+
+***
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+options(scipen = 1, digits = 4, width = 80)
+library(knitr)
+opts_chunk$set(cache = TRUE, autodep = TRUE)
+```
+
+# Life Expectancy Model
+
+## Introduction
+In this report we are working with data compiled by WHO on the life expectancy on multiple countries across the world. Life expectancy has been steadily increasing over the past few decades as technology and countries advance, but by analyzing this data we can get a much more granular idea of exactly which factors affect the Life Expectancy of a country.
+
+Dataset being used: https://www.kaggle.com/kumarajarshi/life-expectancy-who
+
+
+## Methods
+
+### Data Cleaning
+```{r}
+library(readr)
+lifexdata <-  read.csv("Life Expectancy Data.csv")
+df <- data.frame(lifexdata)
+df <- na.omit(df) # if we don't do this, there will be a lot of errors when different models have different data
+```
+
+We can see the variables we are working with: `r names(df)`
+
+- Number of observations: ``r {nrow(lifexdata)}``
+- Number of variables : ``r {ncol(lifexdata)}``
+- Response variable: `Life expectancy` Type: `Numeric`
+- Potential Categorical Predictor variables:
+  - Country
+  - Status
+  - Year
+- Potential Numeric Predictor variables:
+  -Adult Mortality
+  - infant deaths
+  - Alcohol
+  - percentage expenditure
+  - Hepatitis B
+  - Measles
+  - BMI
+  - under-five deaths
+  - Polio
+  - Total expenditure
+  - Diphtheria
+  - HIV/AIDS
+  - GDP
+  - Population
+  - thinness  1-19 years
+  - thinness 5-9 years
+  - Income composition of resources
+  - Schooling
+
+#### Factor Variables
+We have 3 contenders to be Factor Variables: 
+
+|Predictor|No. of Levels                             |
+|---------|------------------------------------------|
+|Country  | `r length(levels(as.factor(df$Country)))`|
+|Status   | `r length(levels(as.factor(df$Status)))` |
+|Year     | `r length(levels(as.factor(df$Year)))`   |
+
+We can immediately eliminate Country from our data frame. It's size would make our model too large and unwieldy. Similarly even Year is also extremely large, therefore we shall be using Status as our sole Factor variable.
+
+```{r}
+drop <- c("Country", "Year")
+df <- df[,!(names(df) %in% drop)]
+df$Status <- as.factor(df$Status)
+```
+
+#### Creation of Meaningful Country Variable: Per-Capita GDP
+Meanwhile, one major characteristic of countries is their GDP, a reflection of the extent to which countries produce wealth. However, totaL GDP does not account for population. A large population could have relatively low per-person output. However, one would expect GDP per capita to be a major influencing factor for the simple reason that rich countries should presumably be able to help maintain a healthier population than poor countries. Accordingly, we create a new variable per_cap_GDP to capture this possibility. Unfortunately, the values become tiny and may be subject to rounding errors. We therefore translate this into a log(per_cap_GDP).
+
+```{r}
+df$per_cap_GDP <- df$GDP / df$Population # values too small
+df$log_per_cap_GDP <- log(df$per_cap_GDP) # better scale
+```
+
+#### Training and Testing Sets
+Now that we have finished cleaning our full data set, we will create out Training and Test data, utilizing the recommended 80-20 Training-Test split:
+
+```{r, message = FALSE}
+trn <- sort(sample(nrow(df), nrow(df) * 0.8))
+train_df <- df[trn,]
+test_df <- df[-trn,]
+```
+
+```{r}
+#This function will be used to calculate the RMSE of our models
+rmse = function(model, training = TRUE){
+  if(training){
+    y = train_df$Life.expectancy
+    y_hat = predict(model,newdata = train_df)
+    n = nrow(train_df)
+  } else{ 
+    y = test_df$Life.expectancy
+    y_hat = predict(model,newdata = test_df)
+    n = nrow(test_df)
+  }
+  sqrt(sum((y - y_hat) ^ 2) / n)
+}
+```
+
+
+### Preliminary Analysis
+
+#### Division of Variables into Categories
+An obvious question to start out with is whether there is significant collinearity among the variables. And one would expect a pairs plot to give us quick insight into the matter. However, because there are so many variables, it is impossible to see anything if one applies "pairs" to all the numeric variables. Therefore, I have chosen to illustrate pair plots for categories of information. I have divided the data into four categories, namely: weight, disease, money, and lifestyle.
+
+**Money**
+```{r}
+money <- subset(train_df, select = c(Life.expectancy, percentage.expenditure, log_per_cap_GDP, Income.composition.of.resources, GDP))
+pairs(money, col = "darkgreen", main = "Economic Factors and Life Expectancy")
+```
+If we check for collinearity, we find the following. Some of these plots area a little unusual. log_per_cap_GDP vs Income.composition.of.resources exhibits one large blob of data on the right, and a completely separate vertical line on the left (the respective orientations are top and bottom if log_per_cap is on the x axis). It is as if some other interacting factor is causing there to be two types of relationships between these variables. This income variable has the same effect when plotted vs Life.expectancy. 
+
+```{r}
+(cor_money <- round(cor(money), 2))
+```
+There are some highly correlated predictors, such as GDP and percentage.expenditure (the correlation is `r cor_money["GDP","percentage.expenditure"]`). Clearly one of those two variables should be eliminated. Since we have already expressed GDP in terms of a transformed variable (log_per_capita_GDP), I suggest eliminating GDP.
+
+**Disease**
+```{r}
+diseases <- subset(train_df, select = c(Life.expectancy, Hepatitis.B, Measles, Polio, Diphtheria, HIV.AIDS))
+pairs(diseases, col = "darkred", main = "Pair Plots for Diseases and Life Expectancy")
+```
+Once again we see the same strange separation of behaviors. When polio is plotted against diphtheria, there appear to be not one but three collinear behaviors. When plotted against hepatitis or life expectancy, both of those diseases show the same kind of "line on left, blob on right" relationship that we saw earlier for life expectancy vs BMI and other variable pairs.
+
+Checking for correlations, we find the following.
+```{r}
+(cor_diseases <- round(cor(diseases), 2))
+```
+In this case, there are no obvious candidates for removal, as the correlations tend to be small, and in fact, frequently slightly negative.
+
+**Weight**
+```{r}
+weight <- subset(train_df, select = c(Life.expectancy, BMI, thinness..1.19.years, thinness.5.9.years))
+pairs(weight, col = "darkblue", main = "Pair Plots for Weight Indices and Life Expectancy")
+```
+When plotted against life expectancy, BMI shows a vertical line on the left and a blob on the right. This is curious behavior, and suggests that there are separate classes of, perhaps, country, where two entirely different behaviors (relationships) can be expected.
+
+There also appears to be serious collinearity between the two thinness variables. We can check the degree of collinearity numerically as follows.
+```{r}
+(cors_weight <- round(cor(weight), 2))
+```
+As expected, the correlation between thinness..1.19.years and thinness.5.9.years is extremely high: `r cors_weight["thinness..1.19.years", "thinness.5.9.years"]`. One of these should be dropped from the weight model. Since 1-19 is more encompassing than 5-9, I would expect the former to be more worthwhile keeping.
+
+**Lifestyle**
+```{r}
+lifestyle <- subset(train_df, select = c(Life.expectancy, Alcohol, Adult.Mortality, infant.deaths, under.five.deaths, Schooling, Population))
+pairs(lifestyle, col = "cadetblue4", main = "Lifestyle, Schooling, Population, and Death")
+```
+Finally, there are some miscellaneous variables that do not really fall into one category. They cover a miscellany of topics about life and death, including alcohol (consumption), adult mortality, infant or children death, schooling, and population. You could call this category "lifestyle and death", but I am going to call it "lifestyle" for short. As always, they are compared against life expectancy.
+
+
+From the plots, right away we suspect nearly perfect collinearity between infant.deaths and under.five deaths. A check for correlations confirms that.    
+
+```{r}
+(cor_lifestyle <- round(cor(lifestyle), 2))
+```
+Here we see some strong correlations between variables and life expectancy. For example, adult mortality has a strong negative correlation, and schooling has a strong positive correlation. But in terms of collinear predictors, nothing jumps out here, so for now we can keep these predictors within our scope of consideration.
+
+#### Preliminary Thematic Models
+We can create temporary models based on these themes just to get a rough idea if these categories of variables tend to have certain trends with respect to life expectancy.
+```{r}
+(discols <- colnames(diseases))
+(moncols <- colnames(money))
+(wtcols <- colnames(weight))
+(lscols <- colnames(lifestyle))
+money_model <- lm(Life.expectancy ~ percentage.expenditure + log_per_cap_GDP + Income.composition.of.resources + GDP, data = train_df)
+disease_model <- lm(Life.expectancy ~ Hepatitis.B + Measles + Polio + Diphtheria + HIV.AIDS, data = train_df)
+weight_model <- lm(Life.expectancy ~ BMI + thinness..1.19.years + thinness.5.9.years, data = train_df)
+lifestyle_model <- lm(Life.expectancy ~ Alcohol + Adult.Mortality + infant.deaths + under.five.deaths + Schooling, data = train_df)
+```
+**Money Model**
+```{r}
+(s_money <- summary(money_model))
+```
+
+When we look at monetary factors, log-per_cap_GDP is highly significant, as is Income composition of resources. percentage expenditure and GDP are not. We may want to eliminate them from further consideration.
+
+**Disease Model**
+```{r}
+(s_disease <- summary(disease_model))
+```
+At a glance, it seems like Measles, Polio, Diphtheria, and AIDS all have highly significant effects on life expectancy. For some reason, Hepatitis.B does not have a statistically significant effect.
+
+**Weight Model**
+```{r}
+(s_weight <- summary(weight_model))
+```
+
+Finally, it appears that thinness 1.19 years is an important factor, as is BMI, but thinness 5.9 years is not significant. We can immediately compare the improved models.
+
+**Lifestyle Model**
+```{r}
+(s_lifestyle <- summary(lifestyle_model))
+```
+Out of the lifestyle variables, it appears that Alcohol is a weak predictor, with a p-value of only 0.22. We may want to jettison that variable. Also, as we noted earlier, infant.deaths and under.five.deaths are practically the same thing. "Under five"" seems to be more inclusive (it may include infants), so we will jettison infant.deaths.
+
+#### Reduced Models: Eliminating Collinear Predictors
+So far it looks like, 
+from the money category, we can eliminate 
+  - percentage.expenditure
+  - GDP
+from diseases, we can eliminate 
+  - Hepatitis
+from the weight category, we can eliminate 
+  - thinness.5.9.years, and
+from the lifestyle category, we can eliminate
+  - Alcohol and infant deaths.
+  
+Let's create new models without these unhelpful predictors and see if they end up being better.
+
+**Money**
+```{r}
+money_reduced <- lm(Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources, data = train_df)
+s_money_reduced <- summary(money_reduced)
+orig_r2 <- s_money$adj.r.squared
+red_r2 <- s_money_reduced$adj.r.squared
+```
+|              |Adj. $R^2$  |Predictors                         |
+|--------------|------------|-----------------------------------|
+|Original Model|`r orig_r2` |`r length(coef(money_model)) - 1`  |
+|Reduced Model |`r red_r2`  |`r length(coef(money_reduced)) - 1`|
+
+Here we can see there is a `r -(red_r2 - orig_r2)/orig_r2 * 100`% decrease in the Adjusted $R^2$ and while reducing the size of the model by `r - length(coef(money_reduced)) + length(coef(money_model))` predictors.
+
+**Disease**
+```{r}
+disease_reduced <- lm(Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS, data = train_df)
+s_disease_reduced <- summary(disease_reduced)
+orig_r2 <- s_disease$adj.r.squared
+red_r2 <- s_disease_reduced$adj.r.squared
+```
+|              |Adj. $R^2$  |Predictors                           |
+|--------------|------------|-------------------------------------|
+|Original Model|`r orig_r2` |`r length(coef(disease_model)) - 1`  |
+|Reduced Model |`r red_r2`  |`r length(coef(disease_reduced)) - 1`|
+
+Here we can see there is a `r -(red_r2 - orig_r2)/orig_r2 * 100`% decrease in the Adjusted $R^2$ and while increasing the size of the model by `r - length(coef(disease_reduced)) + length(coef(disease_model))` predictors.
+
+**Weight**
+```{r}
+weight_reduced <- lm(Life.expectancy ~ BMI + thinness..1.19.years, data = train_df)
+s_weight_reduced <- summary(weight_reduced)
+orig_r2 <- s_weight$adj.r.squared
+red_r2 <- s_weight_reduced$adj.r.squared
+```
+|              |Adj. $R^2$  |Predictors                         |
+|--------------|------------|-----------------------------------|
+|Original Model|`r orig_r2` |`r length(coef(weight_model)) - 1`  |
+|Reduced Model |`r red_r2`  |`r length(coef(weight_reduced)) - 1`|
+
+Here we can see there is a `r (red_r2 - orig_r2)/orig_r2 * 100`% decrease in the Adjusted $R^2$ and while increasing the size of the model by `r - length(coef(weight_reduced)) + length(coef(weight_model))` predictor.
+
+**Lifestyle**
+```{r}
+lifestyle_reduced <- lm(Life.expectancy ~ Adult.Mortality + under.five.deaths + Schooling + Population, data = train_df)
+s_lifestyle_reduced <- summary(lifestyle_reduced)
+orig_r2 <- s_lifestyle$adj.r.squared
+red_r2 <- s_lifestyle_reduced$adj.r.squared
+```
+|              |Adj. $R^2$  |Predictors                         |
+|--------------|------------|-----------------------------------|
+|Original Model|`r orig_r2` |`r length(coef(lifestyle_model)) - 1`  |
+|Reduced Model |`r red_r2`  |`r length(coef(lifestyle_reduced)) - 1`|
+
+Here we can see there is a `r -(red_r2 - orig_r2)/orig_r2 * 100`% decrease in the Adjusted $R^2$ and while increasing the size of the model by `r - length(coef(lifestyle_reduced)) + length(coef(lifestyle_model))` predictor.
+
+In all four cases, when assessed using adjusted R-squared, the reduced models seem to suffer very little with respect to their corresponding fuller models. We appear to be justified in using the smaller models, which we will be using below.
+
+#### Assumptions Tests 
+
+**Breusch-Pagan Test for Heteroscedasticity**
+```{r}
+library(lmtest)
+bp_money <- bptest(money_reduced)$p.value
+bp_disease <-bptest(disease_reduced)$p.value
+bp_weight <-bptest(weight_reduced)$p.value
+bp_lifestyle <-bptest(lifestyle_reduced)$p.value
+```
+
+|Reduced Model| Breusch-Pagan P-Value|
+|-------------|----------------------|
+|Money        |`r bp_money`          |
+|Disease      |`r bp_disease`        |
+|Weight       |`r bp_weight`         |
+|Lifestyle    |`r bp_lifestyle`      |
+
+Seeing that all of our p-values are extremely low for the Breusch-Pagan Test, we have to assume that all our models fail the Equal Variance Assumption. We can confirm this by looking at the Residual-Fitted graphs.
+```{r}
+par(mfrow = c(2,2))
+#Money Model
+plot(fitted(money_reduced), resid(money_reduced),  col = "darkgreen",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Money Model")
+abline(h = 0, lwd = 3, col = "goldenrod")
+
+#Disease Model
+plot(fitted(disease_reduced), resid(disease_reduced),  col = "darkred",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Disease Model")
+abline(h = 0, lwd = 3, col = "black")
+
+#Weight Model
+plot(fitted(weight_reduced), resid(weight_reduced),  col = "darkblue",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Weight Model")
+abline(h = 0, lwd = 3, col = "purple")
+
+#Lifestyle Model
+plot(fitted(lifestyle_reduced), resid(lifestyle_reduced),  col = "cadetblue4",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Lifestyle Model")
+abline(h = 0, lwd = 3, col = "brown4")
+```
+
+**Observations:**
+
++ For the Disease observations, its clear that the variance is increasing as the fitted values increase, rather than staying around the same range
++ In the case of money, the fitted vs residuals plot is problematic, as on the lower end of fitted values, it is as if an entirely different association were taking place. Linearity is somehow violated for low values (nearly all the residuals are above a mean of 0.) Variance does not look horrific outside of the lower range in that plot, but it is certainly not perfect. I suspect that the strange behavior for lower values suggests that there must be an interaction variable of some kind. Perhaps certain countries, or countries with a certain level of per-capita GDP operate by an entirely different model? We will find out when we merge the category-specific models.
++ For weight, the fitted residuals plot looks OK in the middle ranges, but at the outer ends, we are clearly not getting a linear response, with all values above 0 for the lower fitted values, and all values below 0 for the higher fitted values. 
++ The fitted vs residuals plot is not terrible, though normality is a bit suspect in the middle ranges (esp. around 70), and one gets the impression that values are more weighted below the 0 line.
+
+
+**Shapiro-Wilks Test**
+
+|Reduced Model| Shapiro-Wilks P-Value                            |
+|-------------|--------------------------------------------------|
+|Money        |`r shapiro.test(resid(money_reduced))$p.value`    |
+|Disease      |`r shapiro.test(resid(disease_reduced))$p.value`  |
+|Weight       |`r shapiro.test(resid(weight_reduced))$p.value`   |
+|Lifestyle    |`r shapiro.test(resid(lifestyle_reduced))$p.value`|
+
+Seeing that all of our p-values are extremely low for the Shapiro-Wilks Test as well, we have to assume that all our models fail the Normality Assumption. We can check the QQ plots to be sure.
+
+```{r}
+par(mfrow = c(2,2))
+#Money Model
+qqnorm(resid(money_reduced), main = "Reduced Money Model", col = "darkgreen")
+qqline(resid(money_reduced))
+
+#Disease Model
+qqnorm(resid(disease_reduced), main = "Reduced Disease Model", col = "darkred")
+qqline(resid(disease_reduced))
+
+#Weight Model
+qqnorm(resid(weight_reduced), main = "Reduced Weight Model", col = "darkblue")
+qqline(resid(weight_reduced))
+
+#Lifestyle Model
+qqnorm(resid(lifestyle_reduced), main = "Reduced Lifestyle Model", col = "cadetblue4")
+qqline(resid(lifestyle_reduced))
+```
+
+**Observations:**
+
++ The QQ plot for Money looks terrible, with normality clearly violated at extreme values, suggesting that the normality of errors is clearly violated outside the middle quantiles.
++ In the case of disease, the QQ plot is almost ideal except for the very extremes
++ The QQ Plot for Weight is also almost ideal, except for the lower quantile.
++ The QQ plot for Lifestyle also fails badly at the lower quantiles.
+
+**Variance Inflation Factor**
+```{r}
+car::vif(money_reduced)
+car::vif(disease_reduced)
+car::vif(weight_reduced)
+car::vif(lifestyle_reduced)
+```
+All of these values look quite good. By eliminating highly correlated variables, we seem to have eliminated collinearity within these sub-models, however by performing transformations, we can possibly get even better values.
+
+#### Transformed Models: Fixing the Equal Variance and Normality Assumptions
+Currently our reduced models are better than the original ones, however they still have some issues with the Equal Variance and Normality assumptions. By performing some transformations on the variables however, I believe we can improve on them significantly. (All transformations take into account that outlier data is not being removed)
+
+All variable transformation functions were decided by looking at the pairs plot between Life.expectancy and that particular value as well as experimenting with different functions (log, exp, ^2, ^3, 1/x, etc) while increasing the $Adj. R^2$ value (if possible) and keeping size of the model relatively low
+
+**Money**
+```{r}
+money_trans <- lm(Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources + I(Income.composition.of.resources^2) + I(Income.composition.of.resources^3), data = train_df)
+s_money_trans <- summary(money_trans)
+red_r2 <- s_money$adj.r.squared
+trans_r2 <- s_money_trans$adj.r.squared
+```
+|                 |Adj. $R^2$  |Predictors                         |
+|-----------------|------------|-----------------------------------|
+|Reduced Model    |`r red_r2`  |`r length(coef(money_reduced)) - 1`|
+|Transformed Model|`r trans_r2`|`r length(coef(money_trans)) - 1`  |
+
+Here we can see there is a `r (trans_r2 - red_r2)/red_r2 * 100`% increase in the Adjusted $R^2$ and while increasing the size of the model by `r length(coef(money_trans)) - length(coef(money_reduced))` predictors.
+
+**Disease**
+```{r}
+disease_trans <- lm(Life.expectancy ~ Measles + Polio + Diphtheria + HIV.AIDS + log(HIV.AIDS), data = train_df)
+s_disease_trans <- summary(disease_trans)
+red_r2 <- s_disease$adj.r.squared
+trans_r2 <- s_disease_trans$adj.r.squared
+```
+|                 |Adj. $R^2$  |Predictors                           |
+|-----------------|------------|-------------------------------------|
+|Reduced Model    |`r red_r2`  |`r length(coef(disease_reduced)) - 1`|
+|Transformed Model|`r trans_r2`|`r length(coef(disease_trans)) - 1`  |
+
+Again we can see there is a `r (trans_r2 - red_r2)/red_r2`% increase in the Adjusted $R^2$ and while increasing the size of the model by only `r length(coef(money_trans)) - length(coef(money_reduced))` predictors. This is a huge improvement.
+
+**Weight**
+```{r}
+weight_trans <- lm(Life.expectancy ~ BMI + thinness..1.19.years + exp(thinness..1.19.years), data = train_df)
+s_weight_trans <- summary(weight_trans)
+red_r2 <- s_weight$adj.r.squared
+trans_r2 <- s_weight_trans$adj.r.squared
+```
+|                 |Adj. $R^2$  |Predictors                          |
+|-----------------|------------|------------------------------------|
+|Reduced Model    |`r red_r2`  |`r length(coef(weight_reduced)) - 1`|
+|Transformed Model|`r trans_r2`|`r length(coef(weight_trans)) - 1`  |
+
+Here we can see there is a `r (trans_r2 - red_r2)/red_r2`% increase in the Adjusted $R^2$ and while increasing the size of the model by `r length(coef(money_trans)) - length(coef(money_reduced))` predictors. The increase in Adjusted $R^2$ is so small that it might be better to stick with the reduced model
+
+**Lifestyle**
+```{r}
+lifestyle_trans <- lm(Life.expectancy ~ Adult.Mortality + under.five.deaths + Schooling + Population + sqrt(Schooling) , data = train_df)
+s_lifestyle_trans <- summary(lifestyle_trans)
+red_r2 <- s_lifestyle$adj.r.squared
+trans_r2 <- s_lifestyle_trans$adj.r.squared
+```
+|                 |Adj. $R^2$  |Predictors                             |
+|-----------------|------------|---------------------------------------|
+|Reduced Model    |`r red_r2`  |`r length(coef(lifestyle_reduced)) - 1`|
+|Transformed Model|`r trans_r2`|`r length(coef(lifestyle_trans)) - 1`  |
+
+Here we can see there is a `r (trans_r2 - red_r2)/red_r2`% decrease in the Adjusted $R^2$ and while increasing the size of the model by `r length(coef(money_trans)) - length(coef(money_reduced))` predictor. It would definitely be better to stick with the Reduced Model in this case.
+
+We have the Adjusted $R^2$ for all the new models using the transformed variables, so we have a decent idea of which Reduced Models we will be replacing with their Transformed versions, and which will be staying the same. However, we should check to see how our Transformed models treat our linear model assumptions
+
+#### Assumptions Tests 
+
+**Breusch-Pagan Test for Heteroscedasticity**
+```{r}
+library(lmtest)
+bp_money_trans <- bptest(money_trans)$p.value
+bp_disease_trans <-bptest(disease_trans)$p.value
+bp_weight_trans <-bptest(weight_trans)$p.value
+bp_lifestyle_trans <-bptest(lifestyle_trans)$p.value
+```
+                              
+|Model        |BP P-Val (Reduced)|BP P-Val (Transformed)|
+|-------------|------------------|----------------------|
+|Money        |`r bp_money`      |`r bp_money_trans`    |
+|Disease      |`r bp_disease`    |`r bp_disease_trans`  |
+|Weight       |`r bp_weight`     |`r bp_weight_trans`   |
+|Lifestyle    |`r bp_lifestyle`  |`r bp_lifestyle_trans`|
+
+We can see that there is a large improvement for the Money and Disease models, whereas there are much smaller improvements for Weight and Lifestyle, unfortunately, all the models appear to still be failing the Equal Variance assumption, which we can confirm by looking at the new Fitted_Residual Graphs
+
+```{r}
+par(mfrow = c(1,2))
+#Reduced Money Model
+plot(fitted(money_reduced), resid(money_reduced),  col = "darkgreen",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Money Model")
+abline(h = 0, lwd = 3, col = "goldenrod")
+
+#Transformed Money Model
+plot(fitted(money_trans), resid(money_trans),  col = "darkgreen",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Transformed Money Model")
+abline(h = 0, lwd = 3, col = "goldenrod")
+
+par(mfrow = c(1,2))
+#Reduced Disease Model
+plot(fitted(disease_reduced), resid(disease_reduced),  col = "darkred",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Disease Model")
+abline(h = 0, lwd = 3, col = "black")
+
+#Transformed Disease Model
+plot(fitted(disease_trans), resid(disease_trans),  col = "darkred",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Transformed Disease Model")
+abline(h = 0, lwd = 3, col = "black")
+
+par(mfrow = c(1,2))
+#Reduced Weight Model
+plot(fitted(weight_reduced), resid(weight_reduced),  col = "darkblue",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Weight Model")
+abline(h = 0, lwd = 3, col = "purple")
+
+#Transformed Weight Model
+plot(fitted(weight_trans), resid(weight_trans),  col = "darkblue",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Transformed Weight Model")
+abline(h = 0, lwd = 3, col = "purple")
+
+par(mfrow = c(1,2))
+#Reduced Lifestyle Model
+plot(fitted(lifestyle_reduced), resid(lifestyle_reduced),  col = "cadetblue4",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Reduced Lifestyle Model")
+abline(h = 0, lwd = 3, col = "brown4")
+
+#Transformed Lifestyle Model
+plot(fitted(lifestyle_trans), resid(lifestyle_trans),  col = "cadetblue4",
+     ylab = "Residuals",
+     xlab = "Fitted Values",
+     main = "Transformed Lifestyle Model")
+abline(h = 0, lwd = 3, col = "brown4")
+```
+
+**Observations:**
+
+Our graphs confirm what our results of our BP tests. The Money Model and Disease model both improved greatly, while the Weight and Lifestyle models stayed basically the same. 
+
+
+We also want to see if there has been any improvement in the Normality Assumptions so we shall run the Shapiro-Wilks test and compare. 
+
+**Shapiro-Wilks Test**
+
+|Reduced Model|(Reduced) Shapiro-Wilks P-Value                   |(Transformed) Shapiro-Wilks P-Value             |  
+|-------------|--------------------------------------------------|------------------------------------------------|
+|Money        |`r shapiro.test(resid(money_reduced))$p.value`    |`r shapiro.test(resid(money_trans))$p.value`    |
+|Disease      |`r shapiro.test(resid(disease_reduced))$p.value`  |`r shapiro.test(resid(disease_trans))$p.value`  |
+|Weight       |`r shapiro.test(resid(weight_reduced))$p.value`   |`r shapiro.test(resid(weight_trans))$p.value`   |
+|Lifestyle    |`r shapiro.test(resid(lifestyle_reduced))$p.value`|`r shapiro.test(resid(lifestyle_trans))$p.value`|
+
+These values are strange, it appears that the only Model who's P-value improved was the Money model. The Weight And Lifestyle Models stayed relatively the same while the Disease Model's p-value actually got worse. Let's look at the graphs while comparing them to the reduced models
+
+```{r}
+par(mfrow = c(1,2))
+#Reduced Money Model
+qqnorm(resid(money_reduced), main = "Reduced Money Model", col = "darkgreen")
+qqline(resid(money_reduced))
+
+#Transformed Money Model
+qqnorm(resid(money_trans), main = "Transformed Money Model", col = "darkgreen")
+qqline(resid(money_trans))
+```
+As expected, there is a much better improvement in the upper quantile for the Money Model
+
+```{r}
+par(mfrow = c(1,2))
+#Reduced Disease Model
+qqnorm(resid(disease_reduced), main = "Reduced Disease Model", col = "darkred")
+qqline(resid(disease_reduced))
+
+#Transformed Disease Model
+qqnorm(resid(disease_trans), main = "Transformed Disease Model", col = "darkred")
+qqline(resid(disease_trans))
+```
+There does appear to be a slight deterioration in both the upper and lower quantiles of the new graph, however actually looking at the scales of the Y-axis, it appears that the new model might actually be an improvement
+
+```{r}
+par(mfrow = c(1,2))
+#Reduced Weight Model
+qqnorm(resid(weight_reduced), main = "Reduced Weight Model", col = "darkblue")
+qqline(resid(weight_reduced))
+
+#Transformed Weight Model
+qqnorm(resid(weight_trans), main = "Transformed Weight Model", col = "darkblue")
+qqline(resid(weight_trans))
+```
+The Weight graph appears to have not really changed at all, which corresponds to the new SW p-value
+
+```{r}
+par(mfrow = c(1,2))
+#Reduced Lifestyle Model
+qqnorm(resid(lifestyle_reduced), main = "Reduced Lifestyle Model", col = "cadetblue4")
+qqline(resid(lifestyle_reduced))
+
+#Transformed Lifestyle Model
+qqnorm(resid(lifestyle_trans), main = "Transformed Lifestyle Model", col = "cadetblue4")
+qqline(resid(lifestyle_trans))
+```
+There is a very slight improvement in the upper quartile of the Lifestyle graph, while the lower quartile remains the same
+
+
+**Anova Test**
+Since all the Reduced Models are nested within the Transformed models, we can also run Anova tests to see if there is a significant improvement in the transformed models.
+
+|Model     | Reduced vs Transformed P-Value                           |  
+|----------|----------------------------------------------------------|
+|Money     |`r anova(money_reduced,money_trans)[2, "Pr(>F)"]`         |
+|Disease   |`r anova(disease_reduced,disease_trans)[2, "Pr(>F)"]`     |
+|Weight    |`r anova(weight_reduced,weight_trans)[2, "Pr(>F)"]`       |
+|Lifestyle |`r anova(lifestyle_reduced,lifestyle_trans)[2, "Pr(>F)"]` |
+
+**Decision**
+After comparing all these different tests, namely: Anova, SW-Test, BP-Test as well as taking in the change in size of the models and the change in Adjusted $R^2$ we are chosing to continue forward with these models:
+
++ Transformed Money Model
++ Transformed Disease Model
++ Reduced Weight Model
++ Reduced Lifestyle Model
+
+***
+So at this stage, we have identified some good variables for each of the categories (themes). The next step is to try to create a flusher model that combines data from each of these categories into one larger model. There's a number of ways to do this. One would be to keep all the variables we have identified as "good" within the scope, and use forward AIC or BIC.
+
+We are going to use our Transformed Money model as the starter (however any of the models would work) 
+
+**AIC**
+```{r}
+starter <- lm(Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources + I(Income.composition.of.resources^2) + I(Income.composition.of.resources^3), data = train_df)
+aic_model <- step(money_trans,
+                       scope = Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources + I(Income.composition.of.resources^2) + I(Income.composition.of.resources^3) + Measles + Polio + Diphtheria + HIV.AIDS + log(HIV.AIDS) + BMI + thinness..1.19.years + Adult.Mortality + under.five.deaths + Schooling + Population,
+                       direction = "both",
+                       trace = 0)
+summary(aic_model)
+```
+
+
+**BIC**
+```{r}
+n <- nrow(train_df)
+bic_model <- step(money_trans, k = log(n),
+                       scope = Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources + I(Income.composition.of.resources^2) + I(Income.composition.of.resources^3) + Measles + Polio + Diphtheria + HIV.AIDS + log(HIV.AIDS) + BMI + thinness..1.19.years + Adult.Mortality + under.five.deaths + Schooling + Population,
+                       direction = "both",
+                       trace = 0)
+summary(bic_model)
+
+not_in_BIC <- names(coef(aic_model))[!(names(coef(aic_model)) %in% names(coef(bic_model)))]
+```
+
+The AIC model is larger, containing all the same predictors as BIC as well as `r not_in_BIC`, which makes sense as BIC punishes larger models and tends to be smaller, but lets compare the models with an Anova test to see the AIC model is significantly better:
+
+Anova P-val: `r anova(bic_model,aic_model)[2,"Pr(>F)"]`
+
+According to this p-val, we shall move forward with the AIC model. Just for confirmation that it is the best model we have, we shall also compare it with the four models we created it with as well as a new Full Additive Model that contains all the variables of our data frame (except for the Factor Variables) as well as any transformed variables from our smaller models
+
+```{r}
+
+full_model <- lm(Life.expectancy ~ .- Status - GDP - Population + I(Income.composition.of.resources^2) + I(Income.composition.of.resources^3) + log(HIV.AIDS), data = train_df) #We are also removing the GDP and Population Params as we will use the log_per_cap_GDP instead
+summary(full_model)
+full_r2 <- summary(full_model)$adj.r.squared
+aic_r2 <- summary(aic_model)$adj.r.squared
+
+calc_loocv_rmse = function(model) {
+  sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
+}
+
+```
+|AIC Model vs       | Anova P-val                                        |
+|-------------------|----------------------------------------------------|
+|Transformed Money  | `r anova(money_trans,aic_model)[2, "Pr(>F)"]`      |
+|Transformed Disease| `r anova(disease_trans,aic_model)[2, "Pr(>F)"]`    |
+|Reduced Weight     | `r anova(weight_reduced,aic_model)[2, "Pr(>F)"]`   |
+|Reduced Lifestyle  | `r anova(lifestyle_reduced,aic_model)[2, "Pr(>F)"]`|
+|Full               | `r anova(full_model,aic_model)[2, "Pr(>F)"]`       |
+
+According to these results, our AIC model is better than all of the models except for the Full model, but when we look at the adjusted AIC:
+
+|Model|Adjusted $R^2$ |No. Of Predictors             |
+|-----|---------------|------------------------------|
+|AIC  |`r aic_r2`     |`r length(coef(aic_model))-1` |
+|Full |`r full_r2`    |`r length(coef(full_model))-1`|
+
+Here we can see there is a `r (full_r2 - aic_r2)/aic_r2 * 100`% increase in the Adjusted $R^2$ and also increasing the size of the model by `r length(coef(full_model)) - length(coef(aic_model))` predictors. It would definitely be better to stick with the AIC Model.
+
+#### Adding The Factor Variable
+
+Now that we have created our final model using the numerical predictors, its time to add the categorical predictor. We're going to create 2 more models, one that just adds the Status predictor to the AIC and one that adds an interaction between Status and all the other predictors
+
+```{r}
+add_model = lm(Life.expectancy ~ log_per_cap_GDP + Income.composition.of.resources + 
+    I(Income.composition.of.resources^2) + I(Income.composition.of.resources^3) + 
+    log(HIV.AIDS) + Adult.Mortality + HIV.AIDS + under.five.deaths + 
+    Diphtheria + BMI + Population + Status, data = train_df)
+
+int_model = lm(Life.expectancy ~ (log_per_cap_GDP + Income.composition.of.resources + 
+    I(Income.composition.of.resources^2) + I(Income.composition.of.resources^3) + 
+    log(HIV.AIDS) + Adult.Mortality + HIV.AIDS + under.five.deaths + 
+    Diphtheria + BMI + Population) * Status, data = train_df)
+
+add_r2 <- summary(add_model)$adj.r.squared
+int_r2 <- summary(int_model)$adj.r.squared
+
+#aic_loocv <- calc_loocv_rmse(aic_model)
+#add_loocv <- calc_loocv_rmse(add_model)
+#int_loocv <- calc_loocv_rmse(int_model)
+
+anova_aic_add <- anova(aic_model,add_model)[2,"Pr(>F)"]
+
+anova_aic_int <- anova(aic_model,int_model)[2,"Pr(>F)"]
+
+anova_add_int <- anova(add_model,int_model)[2,"Pr(>F)"]
+```
+
+|Model        |Adjusted $R^2$ |Anova vs AIC Model|No. Of Predictors             |
+|-------------|---------------|------------------|------------------------------|
+|AIC          |`r aic_r2`     | NA               |`r length(coef(aic_model))-1` |
+|Interactive  |`r int_r2`     |`r anova_aic_int` |`r length(coef(int_model))-1` |
+
+####Comparing Train and Test Data Performance
+
+However, we did not consider the possibility for overfitting. It would make sense, therefore, to now split the data into train and test datasets, and to see how these models behave.
+
+##TO DO: Train and Test Data
+```{r, message = FALSE}
+
+```
+
+|                 | RMSE (train)        | RMSE (test)                | No of Predictors               |
+|-----------------|---------------------|----------------------------|--------------------------------|
+|AIC Model        | `r rmse(aic_model)` | `r rmse(aic_model, FALSE)` | `r length(coef(aic_model)) - 1`|
+
+
+
+Looking at the RMSE we can see that the model with the transformed predictors as it has a lower RMSE for both the training and testing data. It also has less predictors and we prefer smaller models. As for the combined models that were derived by combining "mini category-based" models, although their explainability is clearly preferable given that they employ largely straightforward combinations of variables, they produce slightly higher RMSEs than both the transformed and additive models. In the end, the transformed model, with only 13 predictors, is best.
+
+
+
+### FINAL TO DO:
+- explain that we have come up with a logical "explanatory model" (the combined models) and a very accurate prediction model (the transformation models).
+- make sure we are following the rubric
+- we may also want to subject the transformation models to some of the assumptions for validation
